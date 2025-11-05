@@ -11,6 +11,9 @@
   "dependencies": {
     "expo": "~54.0.20",
     "expo-status-bar": "~3.0.8",
+  "expo-file-system": "~19.0.17",
+  "expo-sensors": "~15.0.7",
+    "react-native-svg": "^15.8.0",
     "react": "19.1.0",
     "react-native": "0.81.5"
   },

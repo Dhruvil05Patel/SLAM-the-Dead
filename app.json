@@ -35,7 +35,6 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-router",
       [
         "expo-sensors",
         {
@@ -44,11 +43,7 @@
       ],
       "./plugins/withARCore.js"
     ],
-    "experiments": {
-      "typedRoutes": true
-    },
     "extra": {
-      "router": {},
       "eas": {
         "projectId": "8cb489a2-6180-4440-9ca0-4a2a8136bee1"
       }

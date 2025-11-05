@@ -325,28 +325,42 @@ export class DynamicStepCounter {
   private firstRun: boolean = true;
   private avgAcc: number = 0;
   private runCount: number = 0;
-  private sumAcc: number = 0;
+  private smoothedAcc: number = 0;
+  private readonly ewmaBeta: number;
+  private readonly minStepIntervalMs: number;
+  private lastStepTimestamp: number = 0;
 
-  constructor(sensitivity: number = 1.0) {
+  constructor(sensitivity: number = 0.65, minStepIntervalMs: number = 250, ewmaBeta: number = 0.25) {
     this.sensitivity = sensitivity;
     this.upperThreshold = 10.8;
     this.lowerThreshold = 8.8;
+    this.minStepIntervalMs = minStepIntervalMs;
+    this.ewmaBeta = ewmaBeta;
   }
 
-  findStep(accelerationMagnitude: number): boolean {
-    // Update thresholds continuously
-    this.updateThresholds(accelerationMagnitude);
+  findStep(accelerationMagnitude: number, timestampMs: number): boolean {
+    // Smooth the magnitude to stabilize peaks
+    this.smoothedAcc = this.firstRun
+      ? accelerationMagnitude
+      : this.ewmaBeta * accelerationMagnitude + (1 - this.ewmaBeta) * this.smoothedAcc;
 
-    // Detect step (peak above upper threshold)
-    if (accelerationMagnitude > this.upperThreshold) {
+    // Update thresholds from smoothed value
+    this.updateThresholds(this.smoothedAcc);
+
+    // Enforce minimum interval between detected steps to reduce double-counting
+    const refractoryOk = (timestampMs - this.lastStepTimestamp) >= this.minStepIntervalMs;
+
+    // Detect step (peak above upper threshold) on smoothed signal
+    if (this.smoothedAcc > this.upperThreshold && refractoryOk) {
       if (!this.peakFound) {
         this.stepCount++;
         this.peakFound = true;
+        this.lastStepTimestamp = timestampMs;
         return true;
       }
     }
     // Reset peak detection after crossing lower threshold
-    else if (accelerationMagnitude < this.lowerThreshold) {
+    else if (this.smoothedAcc < this.lowerThreshold) {
       this.peakFound = false;
     }
 
@@ -360,11 +374,12 @@ export class DynamicStepCounter {
       this.upperThreshold = acc + this.sensitivity;
       this.lowerThreshold = acc - this.sensitivity;
       this.avgAcc = acc;
+      this.smoothedAcc = acc;
       this.firstRun = false;
       return;
     }
 
-    // Moving average
+    // Moving average baseline
     this.avgAcc = (this.avgAcc * (this.runCount - 1) + acc) / this.runCount;
     this.upperThreshold = this.avgAcc + this.sensitivity;
     this.lowerThreshold = this.avgAcc - this.sensitivity;
@@ -414,14 +429,16 @@ export class EnhancedDeadReckoningEngine {
     this.gyroOrientation = new GyroscopeOrientationDCM();
     this.magOrientation = new MagnetometerOrientation();
     this.complementaryFilter = new ComplementaryFilter();
-    this.stepCounter = new DynamicStepCounter(0.85);
+    // Slightly lower sensitivity and enforce a refractory period for more reliable step detection
+    this.stepCounter = new DynamicStepCounter(0.65, 250, 0.25);
   }
 
   /**
    * Remove gravity component from accelerometer data
    */
   private removeGravity(ax: number, ay: number, az: number): { x: number; y: number; z: number } {
-    const alpha = 0.9;
+    // Slightly faster response to walking dynamics
+    const alpha = 0.8;
     this.gravityX = alpha * this.gravityX + (1 - alpha) * ax;
     this.gravityY = alpha * this.gravityY + (1 - alpha) * ay;
     this.gravityZ = alpha * this.gravityZ + (1 - alpha) * az;
@@ -451,7 +468,7 @@ export class EnhancedDeadReckoningEngine {
     this.state.acceleration = linearAccel;
 
     // Detect step
-    const stepDetected = this.stepCounter.findStep(magnitude);
+  const stepDetected = this.stepCounter.findStep(magnitude, currentTime);
 
     if (stepDetected) {
       // Update position based on step and current heading

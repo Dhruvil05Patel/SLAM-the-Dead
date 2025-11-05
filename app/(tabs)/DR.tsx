@@ -7,13 +7,16 @@ import TrajectoryChart from '../components/TrajectoryChart';
 import { useTheme } from '../../theme/ThemeContext';
 import { EnhancedDeadReckoningEngine } from '../../utils/imuProcessing';
 import { saveSensorData, saveTrajectoryData, saveSensorDataAsCSV } from '../../utils/fileUtils';
-import { SensorData, Position, SENSOR_UPDATE_INTERVAL, DEFAULT_STRIDE_LENGTH } from '../../utils/constants';
+import { SensorData, Position, SENSOR_UPDATE_INTERVAL, DEFAULT_STRIDE_LENGTH, PLOT_INTERVAL_MS } from '../../utils/constants';
 
 const DeadReckoningScreen = () => {
   const { theme } = useTheme();
   const [isLogging, setIsLogging] = useState(false);
   const [sensorData, setSensorData] = useState<SensorData[]>([]);
+  // Committed DR trajectory (step-based, for stats)
   const [trajectory, setTrajectory] = useState<Position[]>([]);
+  // Display trajectory (includes interpolated points for smoother live graph)
+  const [displayTrajectory, setDisplayTrajectory] = useState<Position[]>([]);
   const [currentAccel, setCurrentAccel] = useState({ x: 0, y: 0, z: 0 });
   const [currentGyro, setCurrentGyro] = useState({ x: 0, y: 0, z: 0 });
   const [currentMag, setCurrentMag] = useState({ x: 0, y: 0, z: 0 });
@@ -26,6 +29,12 @@ const DeadReckoningScreen = () => {
   const accelSubscription = useRef<any>(null);
   const gyroSubscription = useRef<any>(null);
   const magSubscription = useRef<any>(null);
+  const lastPlotRef = useRef<number>(0);
+  const displayPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const distSinceLastStepRef = useRef<number>(0);
+  const stepTimestampsRef = useRef<number[]>([]);
+  // Tracks the last time we detected motion (steps, significant accel, or gyro)
+  const lastMotionRef = useRef<number>(0);
 
   useEffect(() => {
     // Set sensor update intervals
@@ -81,11 +90,17 @@ const DeadReckoningScreen = () => {
     drEngine.current.reset();
     drEngine.current.setStrideLength(strideLength);
     setSensorData([]);
-    setTrajectory([{ x: 0, y: 0, timestamp: Date.now() }]);
+  setTrajectory([{ x: 0, y: 0, timestamp: Date.now() }]);
+  setDisplayTrajectory([{ x: 0, y: 0, timestamp: Date.now() }]);
+  displayPosRef.current = { x: 0, y: 0 };
+  distSinceLastStepRef.current = 0;
+  stepTimestampsRef.current = [];
     setPathLength(0);
     setStepCount(0);
     setCalibrationProgress(0);
-    setIsLogging(true);
+  setIsLogging(true);
+  lastPlotRef.current = Date.now();
+  lastMotionRef.current = Date.now();
 
     console.log('Starting sensor logging with Enhanced PDR...');
 
@@ -117,14 +132,67 @@ const DeadReckoningScreen = () => {
           }
           return updated;
         });
+        // Update display path and step stats
+        setDisplayTrajectory(prev => [...prev, { ...result.position }]);
+        displayPosRef.current = { x: result.position.x, y: result.position.y };
+        distSinceLastStepRef.current = 0;
+        // record step timestamp for cadence estimate
+        stepTimestampsRef.current = [...stepTimestampsRef.current.slice(-9), timestamp];
+        lastPlotRef.current = timestamp;
+        lastMotionRef.current = timestamp;
       } else {
-        // Replace the last point (preview/current position) so chart moves smoothly
-        setTrajectory(prev => {
+        // Update the last display point as a live preview
+        setDisplayTrajectory(prev => {
           if (prev.length === 0) return [{ ...currentPos }];
           const updated = [...prev];
-          updated[updated.length - 1] = { ...currentPos };
+          updated[updated.length - 1] = { ...displayPosRef.current, timestamp };
           return updated;
         });
+
+        // Compute basic stationarity using engine's linear acceleration
+        const s = drEngine.current.getState();
+        const linMag = Math.sqrt(
+          (s.acceleration.x || 0) * (s.acceleration.x || 0) +
+          (s.acceleration.y || 0) * (s.acceleration.y || 0) +
+          (s.acceleration.z || 0) * (s.acceleration.z || 0)
+        );
+        // Update motion time if significant linear acceleration observed
+        if (linMag > 0.25) lastMotionRef.current = timestamp;
+
+        const recentlyMoved = timestamp - lastMotionRef.current < 900; // ms
+        const isCalibratingNow = calibrationProgress < 1.0;
+
+        // Force-append interpolated display points only when recently moving and not calibrating
+        if (!isCalibratingNow && recentlyMoved && (timestamp - lastPlotRef.current >= PLOT_INTERVAL_MS)) {
+          const steps = stepTimestampsRef.current;
+          // Estimate step period from last few steps, fallback to 650ms
+          let estPeriod = 650;
+          if (steps.length >= 2) {
+            const diffs = steps.slice(1).map((t, i) => t - steps[i]);
+            const avg = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+            // clamp to reasonable human cadence 350ms-1000ms
+            estPeriod = Math.max(350, Math.min(1000, avg));
+          }
+
+          const dt = timestamp - lastPlotRef.current; // ms
+          const predictedDist = (strideLength * (dt / estPeriod));
+          distSinceLastStepRef.current += predictedDist;
+
+          // Use current fused heading from engine state
+          const heading = s.orientation;
+          displayPosRef.current = {
+            x: displayPosRef.current.x + predictedDist * Math.cos(heading),
+            y: displayPosRef.current.y + predictedDist * Math.sin(heading),
+          };
+
+          setDisplayTrajectory(prev => [...prev, { ...displayPosRef.current, timestamp }]);
+          // Do NOT update pathLength here; keep stats tied to real steps
+          lastPlotRef.current = timestamp;
+        } else {
+          // When stationary or calibrating, freeze the display at the engine's current position
+          displayPosRef.current = { x: currentPos.x, y: currentPos.y };
+          lastPlotRef.current = timestamp; // avoid backlog accumulating
+        }
       }
 
       // Update state from engine
@@ -148,6 +216,10 @@ const DeadReckoningScreen = () => {
       // Update calibration progress
       const state = drEngine.current.getState();
       setCalibrationProgress(state.calibrationProgress);
+      // If notable rotation, mark as motion
+      if (Math.abs(x) > 0.08 || Math.abs(y) > 0.08 || Math.abs(z) > 0.08) {
+        lastMotionRef.current = Date.now();
+      }
     });
 
     // Subscribe to magnetometer
@@ -290,7 +362,7 @@ const DeadReckoningScreen = () => {
 
         {/* Trajectory Visualization */}
         <View style={styles.chartContainer}>
-          <TrajectoryChart drPath={trajectory} showDR={true} showSLAM={false} />
+          <TrajectoryChart drPath={displayTrajectory} showDR={true} showSLAM={false} />
         </View>
 
         {/* Statistics */}
