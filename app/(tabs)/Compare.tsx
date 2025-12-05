@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, Alert, Switch } from 'react-native';
 import { Accelerometer, Gyroscope, Magnetometer } from 'expo-sensors';
 import { ThemedText } from '../components/ThemedText';
-import { ThemedView } from '../components/ThemedView';
+import ThemedView from '../components/ThemedView';
 import TrajectoryChart from '../components/TrajectoryChart';
 import { useTheme } from '../../theme/ThemeContext';
 import { EnhancedDeadReckoningEngine, calculatePathLength, calculateDrift } from '../../utils/imuProcessing';

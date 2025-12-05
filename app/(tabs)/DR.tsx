@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { Accelerometer, Gyroscope, Magnetometer } from 'expo-sensors';
 import { ThemedText } from '../components/ThemedText';
-import { ThemedView } from '../components/ThemedView';
+import ThemedView from '../components/ThemedView';
 import TrajectoryChart from '../components/TrajectoryChart';
 import { useTheme } from '../../theme/ThemeContext';
 import { EnhancedDeadReckoningEngine } from '../../utils/imuProcessing';
@@ -141,14 +141,6 @@ const DeadReckoningScreen = () => {
         lastPlotRef.current = timestamp;
         lastMotionRef.current = timestamp;
       } else {
-        // Update the last display point as a live preview
-        setDisplayTrajectory(prev => {
-          if (prev.length === 0) return [{ ...currentPos }];
-          const updated = [...prev];
-          updated[updated.length - 1] = { ...displayPosRef.current, timestamp };
-          return updated;
-        });
-
         // Compute basic stationarity using engine's linear acceleration
         const s = drEngine.current.getState();
         const linMag = Math.sqrt(
@@ -161,6 +153,14 @@ const DeadReckoningScreen = () => {
 
         const recentlyMoved = timestamp - lastMotionRef.current < 900; // ms
         const isCalibratingNow = calibrationProgress < 1.0;
+
+        // Always update the preview point to show current position on the graph
+        setDisplayTrajectory(prev => {
+          if (prev.length === 0) return [{ x: currentPos.x, y: currentPos.y, timestamp }];
+          const updated = [...prev];
+          updated[updated.length - 1] = { x: currentPos.x, y: currentPos.y, timestamp };
+          return updated;
+        });
 
         // Force-append interpolated display points only when recently moving and not calibrating
         if (!isCalibratingNow && recentlyMoved && (timestamp - lastPlotRef.current >= PLOT_INTERVAL_MS)) {

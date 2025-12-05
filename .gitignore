@@ -39,3 +39,29 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+.expo/
+.react/
+
+# npm and package managers
+.npmrc
+package-lock.json
+
+# EAS Build
+eas.json
+
+# Testing
+coverage/
+.nyc_output/
+.early.coverage
+
+# Logs
+*.log

@@ -1,82 +1,72 @@
-import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import { NativeModules } from 'react-native';
 
-export interface SlamPose {
-  x: number;
-  y: number;
-  z: number;
-  qx: number;
-  qy: number;
-  qz: number;
-  qw: number;
-  timestamp: number;
-}
+export type Pose = { x: number; y: number; z?: number; timestamp: number } | null;
 
-interface ORBSLAM3ModuleInterface {
-  isAvailable(): Promise<boolean>;
-  initialize(vocabularyAssetUri?: string, settingsAssetUri?: string): Promise<string>;
-  start(): Promise<string>;
-  stop(): Promise<string>;
-  getCurrentPose(): Promise<SlamPose>;
-}
+type NativeORBModule = {
+  isAvailable?: () => Promise<boolean> | boolean;
+  initialize?: () => Promise<void> | void;
+  start?: () => Promise<void> | void;
+  stop?: () => Promise<void> | void;
+  getCurrentPose?: () => Promise<Pose> | Pose;
+};
 
-const { ORB_SLAM3Module: NativeORBModule } = NativeModules as any;
+const ExpoModulesProxy: Record<string, unknown> | undefined = (globalThis as any)?.ExpoModules;
+const expoModule = ExpoModulesProxy?.ORBSLAM3 as NativeORBModule | undefined;
+const reactNativeModule = NativeModules?.ORBSLAM3Module as NativeORBModule | undefined;
 
-class ORBSLAM3Wrapper {
-  private eventEmitter: NativeEventEmitter | null = null;
-  private native: ORBSLAM3ModuleInterface | null = null;
+const nativeModule: NativeORBModule | undefined = expoModule ?? reactNativeModule;
 
-  constructor() {
-    if (Platform.OS === 'android' && NativeORBModule) {
-      this.native = NativeORBModule as ORBSLAM3ModuleInterface;
-      this.eventEmitter = new NativeEventEmitter(NativeORBModule);
-    }
+const ensurePromise = async <T>(value: Promise<T> | T, fallback: T): Promise<T> => {
+  try {
+    return await value;
+  } catch (error) {
+    console.warn('[ORB-SLAM3] Native call failed', error);
+    return fallback;
   }
+};
 
+const ORBSLAM3 = {
   async isAvailable(): Promise<boolean> {
-    if (!this.native) return false;
-    try {
-      return await this.native.isAvailable();
-    } catch (e) {
-      console.warn('ORBSLAM3 availability check failed:', e);
+    if (!nativeModule) {
       return false;
     }
-  }
-
-  async initialize(vocabularyAssetUri?: string, settingsAssetUri?: string): Promise<boolean> {
-    if (!this.native) throw new Error('ORBSLAM3 module not available');
-    await this.native.initialize(vocabularyAssetUri, settingsAssetUri);
+    if (typeof nativeModule.isAvailable === 'function') {
+      return ensurePromise(nativeModule.isAvailable(), false);
+    }
     return true;
-  }
-
-  async start(): Promise<boolean> {
-    if (!this.native) throw new Error('ORBSLAM3 module not available');
-    await this.native.start();
-    return true;
-  }
-
-  async stop(): Promise<boolean> {
-    if (!this.native) throw new Error('ORBSLAM3 module not available');
-    await this.native.stop();
-    return true;
-  }
-
-  async getCurrentPose(): Promise<SlamPose | null> {
-    if (!this.native) return null;
-    try {
-      return await this.native.getCurrentPose();
-    } catch (e) {
-      console.warn('ORBSLAM3 getCurrentPose failed:', e);
+  },
+  async initialize(): Promise<void> {
+    if (!nativeModule || typeof nativeModule.initialize !== 'function') {
+      return;
+    }
+    await ensurePromise(nativeModule.initialize(), undefined as void);
+  },
+  async start(): Promise<void> {
+    if (!nativeModule || typeof nativeModule.start !== 'function') {
+      return;
+    }
+    await ensurePromise(nativeModule.start(), undefined as void);
+  },
+  async stop(): Promise<void> {
+    if (!nativeModule || typeof nativeModule.stop !== 'function') {
+      return;
+    }
+    await ensurePromise(nativeModule.stop(), undefined as void);
+  },
+  async getCurrentPose(): Promise<Pose> {
+    if (!nativeModule || typeof nativeModule.getCurrentPose !== 'function') {
       return null;
     }
-  }
+    return ensurePromise<Pose>(nativeModule.getCurrentPose(), null);
+  },
+};
 
-  onPoseUpdate(callback: (pose: SlamPose) => void): { remove: () => void } {
-    if (!this.eventEmitter) {
-      return { remove: () => {} };
-    }
-    const sub = this.eventEmitter.addListener('onORBSLAM3PoseUpdate', callback);
-    return { remove: () => sub.remove() };
+if (!nativeModule) {
+  const linkingHint =
+    "[ORB-SLAM3] Native module not found. If you're running inside Expo Go or haven't linked the custom module, you'll need to build a development client (expo run:android / expo run:ios) with the ORB-SLAM3 native bindings installed.";
+  if (__DEV__) {
+    console.warn(linkingHint);
   }
 }
 
-export default new ORBSLAM3Wrapper();
+export default ORBSLAM3;

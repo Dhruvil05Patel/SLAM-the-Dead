@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import CameraView from 'expo-camera/build/CameraView';
+import { useCameraPermissions } from 'expo-camera';
 import Constants from 'expo-constants';
 import { Accelerometer, Gyroscope, Magnetometer } from 'expo-sensors';
 import { ThemedText } from '../components/ThemedText';
-import { ThemedView } from '../components/ThemedView';
+import ThemedView from '../components/ThemedView';
 import TrajectoryChart from '../components/TrajectoryChart';
 import { useTheme } from '../../theme/ThemeContext';
-import { SensorData, Position, SENSOR_UPDATE_INTERVAL } from '../../utils/constants';
+import { SensorData, Position, SENSOR_UPDATE_INTERVAL, DEFAULT_STRIDE_LENGTH, PLOT_INTERVAL_MS } from '../../utils/constants';
+import { EnhancedDeadReckoningEngine } from '../../utils/imuProcessing';
 import ORBSLAM3 from '../../native/orbslam3/ORB_SLAM3Module';
-import ARCore from '../../native/arcore/ARCoreModule';
 
 const SLAMScreen = () => {
   const { theme } = useTheme();
@@ -16,45 +18,36 @@ const SLAMScreen = () => {
   const [isLogging, setIsLogging] = useState(false);
   const [sensorData, setSensorData] = useState<SensorData[]>([]);
   const [slamTrajectory, setSlamTrajectory] = useState<Position[]>([]);
-  const [arCoreAvailable, setArCoreAvailable] = useState(false);
-  const [slamProvider, setSlamProvider] = useState<'orbslam3' | 'arcore' | 'simulated'>('simulated');
+  const [drTrajectory, setDrTrajectory] = useState<Position[]>([]);
+  const [orbAvailable, setOrbAvailable] = useState(false);
+  const [slamProvider, setSlamProvider] = useState<'orbslam3' | 'simulated'>('orbslam3');
   const [currentAccel, setCurrentAccel] = useState({ x: 0, y: 0, z: 0 });
   const [currentGyro, setCurrentGyro] = useState({ x: 0, y: 0, z: 0 });
   const [currentMag, setCurrentMag] = useState({ x: 0, y: 0, z: 0 });
+  const [detectedCodes, setDetectedCodes] = useState<any[]>([]);
+  const cameraRef = useRef<any>(null);
+  const [permission, requestPermission] = useCameraPermissions();
+
+  // PDR engine for camera-IMU fallback
+  const drEngine = useRef(new EnhancedDeadReckoningEngine(DEFAULT_STRIDE_LENGTH));
 
   const accelSubscription = useRef<any>(null);
   const gyroSubscription = useRef<any>(null);
   const magSubscription = useRef<any>(null);
   const slamIntervalRef = useRef<any>(null);
+  const drPlotThrottleRef = useRef<number>(0);
 
   useEffect(() => {
-    // Check if ARCore is available (Android only)
-    if (Platform.OS === 'android') {
-      // Prefer ORB_SLAM3 if native module is present
-      ORBSLAM3.isAvailable().then((ok) => {
-        if (ok) {
-          setSlamProvider('orbslam3');
-          setArCoreAvailable(false);
-          return;
-        }
-        // Otherwise prefer ARCore if available
-        ARCore.isAvailable().then((ar) => {
-          if (ar) {
-            setSlamProvider('arcore');
-            setArCoreAvailable(true);
-          } else {
-            setSlamProvider('simulated');
-            setArCoreAvailable(false);
-          }
-        }).catch(() => setSlamProvider('simulated'));
-      }).catch(() => {
-        // fallback
-        ARCore.isAvailable().then((ar) => {
-          setSlamProvider(ar ? 'arcore' : 'simulated');
-          setArCoreAvailable(!!ar);
-        }).catch(() => setSlamProvider('simulated'));
+    ORBSLAM3.isAvailable()
+      .then((ok) => {
+        setOrbAvailable(!!ok);
+        setSlamProvider(ok ? 'orbslam3' : 'simulated');
+      })
+      .catch((error) => {
+        console.warn('Failed checking ORB-SLAM3 availability', error);
+        setOrbAvailable(false);
+        setSlamProvider('simulated');
       });
-    }
 
     // Set sensor update intervals
     Accelerometer.setUpdateInterval(SENSOR_UPDATE_INTERVAL);
@@ -105,10 +98,27 @@ const SLAMScreen = () => {
       return;
     }
 
-  console.log('Starting SLAM logging...');
+    const needsCamera = slamProvider === 'orbslam3' || !orbAvailable;
+    if (needsCamera) {
+      const granted = permission?.granted ?? false;
+      if (!granted) {
+        const res = await requestPermission();
+        if (!res.granted) {
+          Alert.alert('Camera Permission', 'Camera access is required for camera-based tracking.');
+          return;
+        }
+      }
+    }
 
+    console.log('Starting SLAM logging...');
+
+    const startTimestamp = Date.now();
+    drEngine.current.reset();
+    drEngine.current.setStrideLength(DEFAULT_STRIDE_LENGTH);
     setSensorData([]);
-    setSlamTrajectory([{ x: 0, y: 0, timestamp: Date.now() }]);
+    setSlamTrajectory([{ x: 0, y: 0, timestamp: startTimestamp }]);
+    setDrTrajectory([{ x: 0, y: 0, timestamp: startTimestamp }]);
+    drPlotThrottleRef.current = startTimestamp;
     setIsLogging(true);
 
   // Subscribe to accelerometer
@@ -118,6 +128,31 @@ const SLAMScreen = () => {
 
       const data: SensorData = { timestamp, type: 'accelerometer', x, y, z };
       setSensorData(prev => [...prev, data]);
+
+      const result = drEngine.current.updateAccelerometer(x, y, z);
+      setDrTrajectory(prev => {
+        const timestampedPos = { ...result.position, timestamp };
+
+        if (prev.length === 0) {
+          drPlotThrottleRef.current = timestamp;
+          return [timestampedPos];
+        }
+
+        if (result.stepDetected) {
+          drPlotThrottleRef.current = timestamp;
+          return [...prev, timestampedPos];
+        }
+
+        const sinceLastPlot = timestamp - drPlotThrottleRef.current;
+        if (sinceLastPlot >= PLOT_INTERVAL_MS) {
+          drPlotThrottleRef.current = timestamp;
+          return [...prev, timestampedPos];
+        }
+
+        const updated = [...prev];
+        updated[updated.length - 1] = timestampedPos;
+        return updated;
+      });
     });
 
     // Subscribe to gyroscope
@@ -127,6 +162,8 @@ const SLAMScreen = () => {
 
       const data: SensorData = { timestamp, type: 'gyroscope', x, y, z };
       setSensorData(prev => [...prev, data]);
+
+      drEngine.current.updateGyroscope(x, y, z);
     });
 
     // Subscribe to magnetometer
@@ -136,6 +173,8 @@ const SLAMScreen = () => {
 
       const data: SensorData = { timestamp, type: 'magnetometer', x, y, z };
       setSensorData(prev => [...prev, data]);
+
+      drEngine.current.updateMagnetometer(x, y, z);
     });
 
     // Initialize selected SLAM provider
@@ -151,19 +190,8 @@ const SLAMScreen = () => {
         }, SENSOR_UPDATE_INTERVAL);
       } catch (e) {
         console.warn('ORB_SLAM3 failed to start, falling back to simulation', e);
-        simulateSLAMData();
-      }
-    } else if (slamProvider === 'arcore' && arCoreAvailable) {
-      try {
-        await ARCore.initialize();
-        await ARCore.startTracking();
-        slamIntervalRef.current = setInterval(async () => {
-          const pose = await ARCore.getCurrentPose();
-          if (!pose) return;
-          setSlamTrajectory(prev => [...prev, { x: pose.x, y: pose.y, timestamp: pose.timestamp }]);
-        }, SENSOR_UPDATE_INTERVAL);
-      } catch (e) {
-        console.warn('ARCore failed to start, falling back to simulation', e);
+        setOrbAvailable(false);
+        setSlamProvider('simulated');
         simulateSLAMData();
       }
     } else {
@@ -190,10 +218,13 @@ const SLAMScreen = () => {
       clearInterval(slamIntervalRef.current);
       slamIntervalRef.current = null;
     }
+    drEngine.current.reset();
     // Stop providers
     if (slamProvider === 'orbslam3') {
       ORBSLAM3.stop().catch(() => {});
     }
+    setDetectedCodes([]);
+    setDrTrajectory([]);
   };
 
   // Simulate SLAM data for demonstration purposes
@@ -235,6 +266,7 @@ const SLAMScreen = () => {
             stopLogging();
             setSensorData([]);
             setSlamTrajectory([]);
+            setDrTrajectory([]);
             setCurrentAccel({ x: 0, y: 0, z: 0 });
             setCurrentGyro({ x: 0, y: 0, z: 0 });
             setCurrentMag({ x: 0, y: 0, z: 0 });
@@ -244,39 +276,38 @@ const SLAMScreen = () => {
     );
   };
 
+  const shouldShowCamera = isLogging && (slamProvider === 'orbslam3' || !orbAvailable);
+
   return (
     <ThemedView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <ThemedText style={styles.title}>SLAM Tracking</ThemedText>
         <ThemedText style={styles.subtitle}>
-          Visual SLAM using ARCore
+          Visual tracking using {slamProvider === 'orbslam3' ? 'ORB_SLAM3 (camera only)' : 'Simulated camera path'}
         </ThemedText>
 
-        {/* ARCore Status */}
+        {/* SLAM Provider Status */}
         <View style={[
           styles.statusCard,
-          { backgroundColor: arCoreAvailable ? 'rgba(76, 175, 80, 0.1)' : 'rgba(255, 152, 0, 0.1)' }
+          { backgroundColor: slamProvider === 'orbslam3' ? 'rgba(76, 175, 80, 0.12)' : 'rgba(255, 152, 0, 0.12)' }
         ]}>
           <ThemedText style={styles.statusLabel}>
-            {arCoreAvailable ? '✅ ARCore Available' : '⚠️ ARCore Not Available'}
+            Provider: {slamProvider === 'orbslam3' ? 'ORB-SLAM3' : 'Simulated'}
           </ThemedText>
-          {!arCoreAvailable && (
-            <ThemedText style={styles.statusSubtext}>
-              ARCore is only available on Android devices
-            </ThemedText>
-          )}
-          {arCoreAvailable && (
-            <ThemedText style={styles.statusSubtext}>
-              Note: This demo uses simulated SLAM data. Full ARCore integration requires native module setup.
-            </ThemedText>
-          )}
+          <ThemedText style={styles.statusSubtext}>
+            {slamProvider === 'orbslam3'
+              ? 'Camera-only ORB SLAM pipeline active.'
+              : orbAvailable
+                ? 'ORB-SLAM3 initialization failed at runtime. Using simulated path.'
+                : 'ORB-SLAM3 native module not detected. Falling back to simulation.'}
+          </ThemedText>
         </View>
 
         {/* Expo Go / Published notice: explain why ARCore won't be available in Expo Go */}
         {appOwnership === 'expo' && (
           <View style={styles.expoNotice}>
             <ThemedText style={styles.expoNoticeText}>
-              Running inside Expo Go (published app). Native ARCore/ORB-SLAM3 modules are not included in Expo Go — build a development client or a production build with EAS and install it on your device to enable full AR functionality.
+              Running inside Expo Go (published app). Native ORB-SLAM3 modules are not included in Expo Go — build a development client or a production build with EAS and install it on your device to enable full camera-only ORB tracking.
             </ThemedText>
           </View>
         )}
@@ -289,7 +320,6 @@ const SLAMScreen = () => {
               isLogging ? styles.stopButton : styles.startButton,
             ]}
             onPress={isLogging ? stopLogging : startLogging}
-            disabled={!arCoreAvailable}
           >
             <ThemedText style={styles.buttonText}>
               {isLogging ? '⏹ Stop Tracking' : '▶ Start Tracking'}
@@ -304,7 +334,8 @@ const SLAMScreen = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Status Indicator */}
+        {/* Status Indicator */
+        }
         {isLogging && (
           <View style={styles.statusBadge}>
             <View style={styles.recordingDot} />
@@ -312,11 +343,35 @@ const SLAMScreen = () => {
           </View>
         )}
 
+        {/* Camera Preview with Live Observations */}
+        {shouldShowCamera && (
+          <View style={styles.cameraContainer}>
+            <CameraView
+              ref={(r: any) => (cameraRef.current = r)}
+              style={StyleSheet.absoluteFill}
+              facing="back"
+              onBarcodeScanned={({ data, type, bounds }: any) => {
+                const now = Date.now();
+                setDetectedCodes((prev) => [{ data, type, bounds, ts: now }, ...prev].slice(0, 5));
+              }}
+              barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'code128'] }}
+            />
+            <View pointerEvents="none" style={styles.overlayContainer}>
+              {detectedCodes.map((c, idx) => (
+                <View key={idx} style={styles.overlayBadge}>
+                  <ThemedText style={styles.overlayText}>{c.type}: {String(c.data).slice(0, 28)}</ThemedText>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
         {/* Trajectory Visualization */}
         <View style={styles.chartContainer}>
           <TrajectoryChart 
+            drPath={drTrajectory}
             slamPath={slamTrajectory} 
-            showDR={false} 
+            showDR={drTrajectory.length > 0} 
             showSLAM={true} 
           />
         </View>
@@ -484,6 +539,31 @@ const styles = StyleSheet.create({
     marginVertical: 20,
     borderRadius: 12,
     overflow: 'hidden',
+  },
+  cameraContainer: {
+    height: 240,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginTop: 10,
+  },
+  overlayContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    padding: 8,
+    gap: 6,
+  },
+  overlayBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+  },
+  overlayText: {
+    color: '#fff',
+    fontSize: 12,
   },
   statsContainer: {
     marginVertical: 20,

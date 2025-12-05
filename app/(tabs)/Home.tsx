@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { ThemedText } from '../components/ThemedText';
-import { ThemedView } from '../components/ThemedView';
+import ThemedView from '../components/ThemedView';
 
 const HomeScreen: React.FC = () => {
   return (
