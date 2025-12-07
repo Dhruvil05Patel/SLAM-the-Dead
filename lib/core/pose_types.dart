@@ -27,19 +27,25 @@ class Pose {
   }
 }
 
-/// Simple linear interpolation for pose streams (orientation uses slerp).
+/// Simple linear interpolation for pose streams (orientation uses nlerp).
 Pose lerpPose(Pose a, Pose b, double t) {
   if (t <= a.timestamp) return a;
   if (t >= b.timestamp) return b;
-  final fraction = (t - a.timestamp) / (b.timestamp - a.timestamp);
+  final fraction = (t - a.timestamp) / (b.timestamp - a.timestamp).clamp(0.001, double.infinity);
   final pos = Vector3.zero()
     ..setValues(
       a.position.x + (b.position.x - a.position.x) * fraction,
       a.position.y + (b.position.y - a.position.y) * fraction,
       a.position.z + (b.position.z - a.position.z) * fraction,
     );
-  final q = Quaternion.identity();
-  q.setFromSlerp(a.orientation, b.orientation, fraction.clamp(0, 1));
+  // Linear interpolation of quaternion components then normalize
+  final qa = a.orientation;
+  final qb = b.orientation;
+  final w = qa.w + (qb.w - qa.w) * fraction;
+  final x = qa.x + (qb.x - qa.x) * fraction;
+  final y = qa.y + (qb.y - qa.y) * fraction;
+  final z = qa.z + (qb.z - qa.z) * fraction;
+  final q = Quaternion(x, y, z, w)..normalize();
   return Pose(timestamp: t, position: pos, orientation: q);
 }
 

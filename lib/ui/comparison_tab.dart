@@ -1,8 +1,8 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' as mat;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:vector_math/vector_math_64.dart';
 
 import '../core/alignment.dart';
+import '../core/pose_types.dart';
 import '../providers.dart';
 import 'widgets/trajectory_plot.dart';
 
@@ -10,7 +10,7 @@ class ComparisonTab extends ConsumerWidget {
   const ComparisonTab({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  mat.Widget build(mat.BuildContext context, WidgetRef ref) {
     final dr = ref.watch(drHistoryProvider);
     final slam = ref.watch(slamHistoryProvider);
 
@@ -25,29 +25,29 @@ class ComparisonTab extends ConsumerWidget {
       metrics = computeMetrics(dr.take(n).toList(), alignedSlam);
     }
 
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return mat.SafeArea(
+      child: mat.SingleChildScrollView(
+        padding: const mat.EdgeInsets.all(12),
+        child: mat.Column(
+          crossAxisAlignment: mat.CrossAxisAlignment.start,
           children: [
             TrajectoryPlot(
               poses: dr,
               secondary: slam,
-              color: Colors.cyan,
-              secondaryColor: Colors.orange,
+              color: mat.Colors.cyan,
+              secondaryColor: mat.Colors.orange,
             ),
             if (aligned != null && metrics != null) ...[
-              Text('Alignment scale: ${aligned.scale.toStringAsFixed(3)}'),
-              Text('RMSE: ${metrics.rmse.toStringAsFixed(3)} m'),
-              Text('Max drift: ${metrics.maxError.toStringAsFixed(3)} m'),
-              const SizedBox(height: 8),
-              Text(
+              mat.Text('Alignment scale: ${aligned.scale.toStringAsFixed(3)}'),
+              mat.Text('RMSE: ${metrics.rmse.toStringAsFixed(3)} m'),
+              mat.Text('Max drift: ${metrics.maxError.toStringAsFixed(3)} m'),
+              const mat.SizedBox(height: 8),
+              mat.Text(
                 'Auto-analysis: Drift rate ${metrics.driftRate.toStringAsFixed(3)} m/s. '
                 'If divergence spikes, recalibrate IMU, increase feature count, or run loop closures.',
               ),
             ] else
-              const Text('Waiting for both trajectories to accumulate...'),
+              const mat.Text('Waiting for both trajectories to accumulate...'),
           ],
         ),
       ),

@@ -153,18 +153,18 @@ TrajectoryMetrics computeMetrics(List<Pose> ref, List<Pose> est) {
   if (ref.isEmpty || est.isEmpty) {
     return TrajectoryMetrics(rmse: 0, meanAbsError: 0, maxError: 0, driftRate: 0);
   }
-  final n = math.min(ref.length, est.length);
+  final n = math.min(ref.length, est.length).toDouble();
   var errSum = 0.0;
   var absSum = 0.0;
   var maxErr = 0.0;
-  for (var i = 0; i < n; i++) {
+  for (var i = 0; i < n.toInt(); i++) {
     final e = (est[i].position - ref[i].position).length;
     errSum += e * e;
     absSum += e;
     maxErr = math.max(maxErr, e);
   }
   final duration = (ref.last.timestamp - ref.first.timestamp).abs();
-  final driftRate = duration > 0 ? maxErr / duration : 0;
+  final driftRate = duration > 0 ? maxErr / duration : 0.0;
   return TrajectoryMetrics(
     rmse: math.sqrt(errSum / n),
     meanAbsError: absSum / n,

@@ -20,12 +20,12 @@ class CameraService {
   }
 
   Future<void> startStream({
-    required void Function(CameraImage image) onImage,
+    required void Function(CameraImage? image) onImage,
   }) async {
     if (_controller == null) {
       await init();
     }
-    _imageSub = _controller!.startImageStream(onImage);
+    await _controller!.startImageStream((img) => onImage(img));
   }
 
   Future<void> stop() async {

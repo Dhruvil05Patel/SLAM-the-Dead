@@ -4,7 +4,6 @@ import 'package:async/async.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:vector_math/vector_math_64.dart';
 
-import '../core/dr_engine.dart';
 
 class ImuSample {
   ImuSample({

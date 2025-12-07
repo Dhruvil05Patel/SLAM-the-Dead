@@ -46,10 +46,18 @@ yarn-error.*
 *.swp
 *.swo
 *~
+*.iml
 
 # Build artifacts
 .expo/
 .react/
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
 
 # npm and package managers
 .npmrc
@@ -65,3 +73,17 @@ coverage/
 
 # Logs
 *.log
+build_log.txt
+
+# Flutter/Dart metadata
+.metadata
+
+# Flutter web build
+web/
+
+# Flutter generated files
+pubspec.lock
+analysis_options.yaml
+
+# Test scripts
+run_tests.sh

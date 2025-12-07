@@ -5,11 +5,12 @@ import 'package:vector_math/vector_math_64.dart';
 import 'pose_types.dart';
 
 class ImuCalibration {
-  const ImuCalibration({
-    this.accelBias = const Vector3.zero(),
-    this.gyroBias = const Vector3.zero(),
+  ImuCalibration({
+    Vector3? accelBias,
+    Vector3? gyroBias,
     this.gravity = 9.80665,
-  });
+  })  : accelBias = accelBias ?? Vector3.zero(),
+        gyroBias = gyroBias ?? Vector3.zero();
 
   final Vector3 accelBias;
   final Vector3 gyroBias;
@@ -86,10 +87,10 @@ class MadgwickFilter {
     final J23 = 2 * q4;
     final J24 = 2 * q3;
 
-    final J31 = 0;
+    const J31 = 0;
     final J32 = -4 * q2;
     final J33 = -4 * q3;
-    final J34 = 0;
+    const J34 = 0;
 
     final grad1 = J11 * f1 + J21 * f2 + J31 * f3;
     final grad2 = J12 * f1 + J22 * f2 + J32 * f3;
@@ -128,9 +129,9 @@ class MadgwickFilter {
 /// Strapdown integration for DR in ENU frame.
 class DeadReckoningEngine {
   DeadReckoningEngine({
-    ImuCalibration calibration = const ImuCalibration(),
+    ImuCalibration? calibration,
     MadgwickFilter? filter,
-  })  : _calibration = calibration,
+  })  : _calibration = calibration ?? ImuCalibration(),
         _filter = filter ?? MadgwickFilter(),
         _state = DeadReckoningState(
           pose: Pose(
@@ -144,7 +145,7 @@ class DeadReckoningEngine {
   DeadReckoningState get state => _state;
 
   ImuCalibration _calibration;
-  MadgwickFilter _filter;
+  final MadgwickFilter _filter;
   DeadReckoningState _state;
 
   void updateCalibration(ImuCalibration calibration) {
