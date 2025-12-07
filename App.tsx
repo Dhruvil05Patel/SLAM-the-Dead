@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView, StyleSheet, View, TouchableOpacity, Text } from 'react-native';
+import { StyleSheet, View, TouchableOpacity, Text } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { ThemeProvider } from './theme/ThemeContext';
 import HomeScreen from './app/(tabs)/Home';
 import DeadReckoningScreen from './app/(tabs)/DR';
@@ -47,13 +48,15 @@ export default function App() {
   };
 
   return (
-    <ThemeProvider>
-      <SafeAreaView style={styles.container}>
-        <StatusBar style="auto" />
-        <View style={styles.content}>{renderScreen()}</View>
-        <TabBar active={active} setActive={setActive} />
-      </SafeAreaView>
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <SafeAreaView style={styles.container} edges={['top']}>
+          <StatusBar style="auto" />
+          <View style={styles.content}>{renderScreen()}</View>
+          <TabBar active={active} setActive={setActive} />
+        </SafeAreaView>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
 

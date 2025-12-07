@@ -227,30 +227,56 @@ const SLAMScreen = () => {
     setDrTrajectory([]);
   };
 
-  // Simulate SLAM data for demonstration purposes
-  // In production, this would be replaced with actual ARCore pose data
+  // Simulate SLAM data using DR engine with reduced drift
+  // This provides a more realistic SLAM simulation that follows actual movement
   const simulateSLAMData = () => {
-    let angle = 0;
-    let radius = 0;
     let updateCount = 0;
+    let lastDrPosition = { x: 0, y: 0 };
+    let slamPosition = { x: 0, y: 0 };
+    let driftCorrection = { x: 0, y: 0 };
     
-    slamIntervalRef.current = setInterval(() => {
-      // Simulate a spiral path (more accurate than DR due to "SLAM correction")
-      angle += 0.1;
-      radius += 0.01;
-      const x = radius * Math.cos(angle);
-      const y = radius * Math.sin(angle);
-
-      setSlamTrajectory(prev => {
-        const updated = [...prev, { x, y, timestamp: Date.now() }];
-        // Log every 50 updates to avoid console spam
-        updateCount++;
-        if (updateCount % 50 === 0) {
-          console.log(`SLAM Update: ${updated.length} points, Position: (${x.toFixed(2)}, ${y.toFixed(2)})`);
-        }
-        return updated;
+    // Use DR trajectory updates to drive SLAM simulation
+    // SLAM should be more accurate (less drift) than DR
+    const updateSLAMFromDR = () => {
+      setDrTrajectory(currentDr => {
+        if (currentDr.length === 0) return currentDr;
+        
+        const latestDr = currentDr[currentDr.length - 1];
+        const dx = latestDr.x - lastDrPosition.x;
+        const dy = latestDr.y - lastDrPosition.y;
+        
+        // Apply drift correction (SLAM reduces drift by ~30-50%)
+        const driftReduction = 0.4; // 40% less drift
+        const correctedDx = dx * (1 - driftReduction);
+        const correctedDy = dy * (1 - driftReduction);
+        
+        // Accumulate small corrections to prevent runaway drift
+        driftCorrection.x += correctedDx;
+        driftCorrection.y += correctedDy;
+        
+        // Apply smoothing to SLAM position (SLAM is typically smoother)
+        const smoothing = 0.85;
+        slamPosition.x = slamPosition.x * smoothing + (lastDrPosition.x + driftCorrection.x) * (1 - smoothing);
+        slamPosition.y = slamPosition.y * smoothing + (lastDrPosition.y + driftCorrection.y) * (1 - smoothing);
+        
+        lastDrPosition = { x: latestDr.x, y: latestDr.y };
+        
+        setSlamTrajectory(prev => {
+          const newPos = { x: slamPosition.x, y: slamPosition.y, timestamp: latestDr.timestamp };
+          const updated = prev.length === 0 ? [newPos] : [...prev, newPos];
+          
+          updateCount++;
+          if (updateCount % 50 === 0) {
+            console.log(`SLAM Update: ${updated.length} points, Position: (${slamPosition.x.toFixed(2)}, ${slamPosition.y.toFixed(2)})`);
+          }
+          return updated;
+        });
+        
+        return currentDr;
       });
-    }, SENSOR_UPDATE_INTERVAL);
+    };
+    
+    slamIntervalRef.current = setInterval(updateSLAMFromDR, SENSOR_UPDATE_INTERVAL);
   };
 
   const handleReset = () => {

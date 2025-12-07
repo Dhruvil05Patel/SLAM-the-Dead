@@ -320,51 +320,71 @@ const CompareScreen = () => {
     }
   };
 
-  // Simulate SLAM tracking (more accurate than DR)
+  // Simulate SLAM tracking using DR engine with reduced drift
+  // This provides realistic SLAM simulation that follows actual movement
   const simulateSLAMTracking = () => {
-    let angle = 0;
-    let radius = 0;
     let updateCount = 0;
+    let lastDrPosition = { x: 0, y: 0 };
+    let slamPosition = { x: 0, y: 0 };
+    let driftCorrection = { x: 0, y: 0 };
     
-    slamIntervalRef.current = setInterval(() => {
-      // Simulate a more accurate path with less drift
-      angle += 0.08;
-      radius += 0.008;
-      const x = radius * Math.cos(angle) * 0.95; // Slightly more accurate
-      const y = radius * Math.sin(angle) * 0.95;
-      const newPos = { x, y, timestamp: Date.now() };
-
-      setSlamTrajectory(prev => {
-        const updated = [...prev, newPos];
+    // Use DR trajectory updates to drive SLAM simulation
+    // SLAM should be more accurate (less drift) than DR
+    const updateSLAMFromDR = () => {
+      setDrTrajectory(currentDr => {
+        if (currentDr.length === 0) return currentDr;
         
-        if (updated.length > 1) {
-          const last = updated[updated.length - 2];
-          const dx = newPos.x - last.x;
-          const dy = newPos.y - last.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          setSlamPathLength(prevLength => prevLength + distance);
-        }
-
-        // Log every 50 updates
-        updateCount++;
-        if (updateCount % 50 === 0) {
-          console.log(`Compare SLAM Update: ${updated.length} points, DR vs SLAM drift calculation`);
-        }
+        const latestDr = currentDr[currentDr.length - 1];
+        const dx = latestDr.x - lastDrPosition.x;
+        const dy = latestDr.y - lastDrPosition.y;
         
-        return updated;
+        // Apply drift correction (SLAM reduces drift by ~35-45%)
+        const driftReduction = 0.4; // 40% less drift
+        const correctedDx = dx * (1 - driftReduction);
+        const correctedDy = dy * (1 - driftReduction);
+        
+        // Accumulate corrections to prevent runaway drift
+        driftCorrection.x += correctedDx;
+        driftCorrection.y += correctedDy;
+        
+        // Apply smoothing to SLAM position (SLAM is typically smoother)
+        const smoothing = 0.88;
+        slamPosition.x = slamPosition.x * smoothing + (lastDrPosition.x + driftCorrection.x) * (1 - smoothing);
+        slamPosition.y = slamPosition.y * smoothing + (lastDrPosition.y + driftCorrection.y) * (1 - smoothing);
+        
+        lastDrPosition = { x: latestDr.x, y: latestDr.y };
+        
+        const newPos = { x: slamPosition.x, y: slamPosition.y, timestamp: latestDr.timestamp };
+        
+        setSlamTrajectory(prev => {
+          const updated = prev.length === 0 ? [newPos] : [...prev, newPos];
+          
+          if (updated.length > 1) {
+            const last = updated[updated.length - 2];
+            const dx = newPos.x - last.x;
+            const dy = newPos.y - last.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            setSlamPathLength(prevLength => prevLength + distance);
+          }
+          
+          // Log every 50 updates
+          updateCount++;
+          if (updateCount % 50 === 0) {
+            console.log(`Compare SLAM Update: ${updated.length} points, Position: (${slamPosition.x.toFixed(2)}, ${slamPosition.y.toFixed(2)})`);
+          }
+          
+          return updated;
+        });
+        
+        // Calculate drift between DR and SLAM
+        const drift = calculateDrift(latestDr, newPos);
+        setCurrentDrift(drift);
+        
+        return currentDr;
       });
-
-      // Calculate drift using latest positions
-      // This runs after both trajectories are updated
-      setDrTrajectory(currentDrTraj => {
-        if (currentDrTraj.length > 0) {
-          const drLast = currentDrTraj[currentDrTraj.length - 1];
-          const drift = calculateDrift(drLast, newPos);
-          setCurrentDrift(drift);
-        }
-        return currentDrTraj;
-      });
-    }, SENSOR_UPDATE_INTERVAL);
+    };
+    
+    slamIntervalRef.current = setInterval(updateSLAMFromDR, SENSOR_UPDATE_INTERVAL);
   };
 
   const handleExport = async () => {
