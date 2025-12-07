@@ -4,12 +4,13 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
-    "android": "expo run:android",
+    "android": "scripts\\run-android.bat",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "prebuild": "expo prebuild",
+    "prebuild": "scripts\\prebuild-android.bat",
     "build:android": "eas build --platform android",
-    "build:ios": "eas build --platform ios"
+    "build:ios": "eas build --platform ios",
+    "setup:android": "setup-android-env.bat"
   },
   "dependencies": {
     "expo": "~54.0.20",

@@ -46,6 +46,41 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo ========================================
+echo  Checking Android SDK...
+echo ========================================
+echo.
+
+REM Check for Android SDK
+set "ANDROID_SDK_FOUND=0"
+if exist "%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe" (
+    set "ANDROID_SDK_FOUND=1"
+    set "ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk"
+) else if exist "%USERPROFILE%\AppData\Local\Android\Sdk\platform-tools\adb.exe" (
+    set "ANDROID_SDK_FOUND=1"
+    set "ANDROID_HOME=%USERPROFILE%\AppData\Local\Android\Sdk"
+) else if exist "C:\Android\Sdk\platform-tools\adb.exe" (
+    set "ANDROID_SDK_FOUND=1"
+    set "ANDROID_HOME=C:\Android\Sdk"
+)
+
+if %ANDROID_SDK_FOUND%==1 (
+    echo [OK] Android SDK found at: %ANDROID_HOME%
+    echo.
+    echo Setting ANDROID_HOME for this session...
+    set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
+    set "PATH=%ANDROID_HOME%\platform-tools;%ANDROID_HOME%\tools;%PATH%"
+) else (
+    echo [WARNING] Android SDK not found in default locations.
+    echo.
+    echo If you plan to build for Android, you need to:
+    echo   1. Install Android Studio from: https://developer.android.com/studio
+    echo   2. Or run setup-android-env.bat to configure Android SDK path
+    echo   3. Or set ANDROID_HOME environment variable manually
+    echo.
+)
+
+echo.
+echo ========================================
 echo  Setup Complete! 
 echo ========================================
 echo.
@@ -58,6 +93,10 @@ echo 2. Start the development server:
 echo    npm start
 echo.
 echo 3. Scan the QR code with Expo Go (Android) or Camera (iOS)
+echo.
+echo For Android development:
+echo   - Run setup-android-env.bat to configure Android SDK
+echo   - Or set ANDROID_HOME environment variable manually
 echo.
 echo For detailed instructions, see: MOBILE_DEPLOYMENT_GUIDE.md
 echo.
