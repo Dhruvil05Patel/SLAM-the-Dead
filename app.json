@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "SmartNav",
-    "slug": "smartnav",
+    "name": "SLAM the Dead",
+    "slug": "slam-the-dead",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "scheme": "smartnav",
+    "scheme": "slamthedead",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -15,20 +15,25 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.smartnav.app"
+      "bundleIdentifier": "com.slamthedead.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Camera is required for Visual SLAM tracking and feature detection.",
+        "NSMotionUsageDescription": "Motion sensors are required for Dead Reckoning and SLAM algorithms."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.smartnav.app",
+      "package": "com.slamthedead.app",
       "permissions": [
         "CAMERA",
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "WRITE_EXTERNAL_STORAGE",
-        "READ_EXTERNAL_STORAGE"
+        "READ_EXTERNAL_STORAGE",
+        "HIGH_SAMPLING_RATE_SENSORS"
       ]
     },
     "web": {
@@ -38,7 +43,13 @@
       [
         "expo-sensors",
         {
-          "motionPermission": "Allow SmartNav to access device motion sensors for dead reckoning and SLAM tracking."
+          "motionPermission": "Allow SLAM the Dead to access device motion sensors for dead reckoning and SLAM tracking."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow SLAM the Dead to access camera for Visual SLAM feature tracking."
         }
       ],
       "./plugins/withARCore.js"
