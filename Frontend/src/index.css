@@ -1,0 +1,41 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+:root {
+    color-scheme: dark;
+}
+
+* {
+    font-family: "Space Grotesk", "Inter", system-ui, -apple-system, sans-serif;
+}
+
+code,
+pre,
+.font-mono {
+    font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+/* Leaflet map container fix */
+.leaflet-container {
+    height: 100%;
+    width: 100%;
+    z-index: 1;
+    border-radius: 16px;
+    overflow: hidden;
+}
+
+/* Ensure Leaflet tiles load properly */
+.leaflet-tile-container {
+    pointer-events: auto;
+}
+
+/* Fix for dark theme */
+.leaflet-control-zoom a {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    color: #1a1f2a !important;
+}
+
+.leaflet-bar a {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    color: #1a1f2a !important;
+}
