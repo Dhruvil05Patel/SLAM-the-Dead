@@ -2,13 +2,11 @@ import React, { useEffect, useState, useRef } from "react";
 import "./App.css";
 import DeadReckoning from "./components/DeadReckoning";
 import SLAM from "./components/SLAM";
-import TrajectoryComparison from "./components/TrajectoryComparison";
 
 const CONTRIBUTORS = [
   { name: "Dhruvil Patel", role: "Lead Developer", icon: "👨‍💻", description: "Architecture and full-stack implementation" },
-  { name: "Vision Team", role: "SLAM & Computer Vision", icon: "👁️", description: "Visual SLAM algorithms and feature detection" },
-  { name: "Sensor Team", role: "IMU & Dead Reckoning", icon: "📡", description: "Inertial measurement and motion tracking" },
-  { name: "UI/UX Design", role: "Interface & Experience", icon: "🎨", description: "Visual design and user experience" }
+  { name: "Hrithik Patel", role: "SLAM & Computer Vision", icon: "👁️", description: "Visual SLAM algorithms and feature detection" },
+  { name: "Farzan Bhalara", role: "IMU & Dead Reckoning", icon: "📡", description: "Inertial measurement and motion tracking" },
 ];
 
 export default function App() {
