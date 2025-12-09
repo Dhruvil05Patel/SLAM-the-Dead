@@ -494,7 +494,7 @@ export default function App() {
                   </a>
                 </li>
                 <li>
-                  <a href="#" className="hover:text-emerald-300 transition">
+                  <a href="https://github.com/Dhruvil05Patel/SLAM-the-Dead" target="_blank" rel="noopener noreferrer" className="hover:text-emerald-300 transition">
                     GitHub
                   </a>
                 </li>
@@ -506,18 +506,13 @@ export default function App() {
               <h4 className="text-sm font-semibold text-white mb-3">Contact</h4>
               <ul className="space-y-2 text-xs sm:text-sm text-slate-400">
                 <li>
-                  <a href="mailto:contact@slamthedead.com" className="hover:text-emerald-300 transition">
-                    contact@slamthedead.com
+                  <a href="mailto:dhruvil1405patel@gmail.com" className="hover:text-emerald-300 transition">
+                    dhruvil1405patel@gmail.com
                   </a>
                 </li>
                 <li>
-                  <a href="#" className="hover:text-emerald-300 transition">
+                  <a href="https://github.com/Dhruvil05Patel/SLAM-the-Dead/issues" target="_blank" rel="noopener noreferrer" className="hover:text-emerald-300 transition">
                     GitHub Issues
-                  </a>
-                </li>
-                <li>
-                  <a href="#" className="hover:text-emerald-300 transition">
-                    Discussions
                   </a>
                 </li>
               </ul>

@@ -22,6 +22,7 @@ export default function DeadReckoning({ theme = "dark", onTrajectoryUpdate }) {
     const [isMonitoring, setIsMonitoring] = useState(false);
     const [error, setError] = useState(null);
     const [isCalibrating, setIsCalibrating] = useState(false);
+    const [calibrationStatus, setCalibrationStatus] = useState(""); // Calibration feedback
 
     // Refs for DR state
     const velRef = useRef(velocity);
@@ -29,9 +30,20 @@ export default function DeadReckoning({ theme = "dark", onTrajectoryUpdate }) {
     const pathRef = useRef(path);
     const headingRef = useRef(heading);
     const lastTimestampRef = useRef(null);
+    const lastCompassUpdateRef = useRef(null);
+    const lastPathUpdateRef = useRef(null); // Separate timestamp for path sampling
+    const lastDisplayUpdateRef = useRef(null); // Throttle UI updates to every 500ms
     const stationaryCountRef = useRef(0);
-    const accelBiasRef = useRef({ x: 0, y: 0 });
-    const compassFilterRef = useRef({ lastValue: null, alpha: 0.2 });
+    const accelBiasRef = useRef({ x: 0, y: 0, z: 0 });
+    const accelNoiseRef = useRef({ x: 0, y: 0, z: 0 }); // Accelerometer noise std dev
+    const gyroBiasRef = useRef(0); // Gyro Z-axis bias (rad/s)
+    const gyroNoiseRef = useRef(0); // Gyro noise std dev
+    const compassFilterRef = useRef({ lastValue: null, alpha: 0.08 });
+    const compassNoiseRef = useRef(0); // Compass noise std dev (degrees)
+    const gravityRef = useRef(9.81);
+    const gyroHeadingDriftRef = useRef(0); // Accumulate heading change from gyro
+    const gyroHeadingSamplesRef = useRef(0); // Sample count for bias estimation
+    const calibrationDataRef = useRef(null); // Store calibration results
 
     // Update refs whenever state changes
     useEffect(() => {
@@ -87,10 +99,10 @@ export default function DeadReckoning({ theme = "dark", onTrajectoryUpdate }) {
             if (compassFilterRef.current.lastValue === null) {
                 compassFilterRef.current.lastValue = compensatedHeading;
             } else {
-                const alpha = compassFilterRef.current.alpha;
+                const filterAlpha = compassFilterRef.current.alpha;
                 const filtered =
-                    alpha * compensatedHeading +
-                    (1 - alpha) * compassFilterRef.current.lastValue;
+                    filterAlpha * compensatedHeading +
+                    (1 - filterAlpha) * compassFilterRef.current.lastValue;
                 compassFilterRef.current.lastValue = filtered;
                 compensatedHeading = filtered;
             }
@@ -111,29 +123,23 @@ export default function DeadReckoning({ theme = "dark", onTrajectoryUpdate }) {
                 setTimeout(() => setIsCalibrating(false), 2000);
             }
 
+            // Update ref IMMEDIATELY (don't wait for state update)
+            headingRef.current = compensatedHeading;
+            lastCompassUpdateRef.current = performance.now();
+            gyroHeadingDriftRef.current = 0; // Reset gyro drift when compass updates
             setHeading(compensatedHeading);
         }
     }, []);
 
     // Handle device motion (acceleration & rotation)
     const handleDeviceMotion = useCallback((event) => {
-        // Raw acceleration for display
+        // Raw acceleration for display (includes gravity)
         if (event.accelerationIncludingGravity) {
             const { x, y, z } = event.accelerationIncludingGravity;
             setAccelerometerData({ x, y, z });
         }
 
-        // Rotation rate for display
-        if (event.rotationRate) {
-            const { alpha, beta, gamma } = event.rotationRate;
-            setGyroscopeData({
-                alpha: (alpha || 0) * (180 / Math.PI),
-                beta: (beta || 0) * (180 / Math.PI),
-                gamma: (gamma || 0) * (180 / Math.PI),
-            });
-        }
-
-        // Linear acceleration for DR
+        // Linear acceleration for DR (already has gravity removed)
         const acc = event.acceleration;
         if (!acc) return;
 
@@ -145,16 +151,46 @@ export default function DeadReckoning({ theme = "dark", onTrajectoryUpdate }) {
         }
 
         const deltaTime = (now - lastTimestampRef.current) / 1000.0;
-        if (deltaTime <= 0 || deltaTime < 0.001) return;
+
+        // Rotation rate for display and heading prediction
+        if (event.rotationRate) {
+            const { alpha, beta, gamma } = event.rotationRate;
+            setGyroscopeData({
+                alpha: (alpha || 0) * (180 / Math.PI),
+                beta: (beta || 0) * (180 / Math.PI),
+                gamma: (gamma || 0) * (180 / Math.PI),
+            });
+            
+            // Integrate gyro Z-axis (heading rotation) between compass updates
+            // Z-axis rotation rate is alpha in rad/s
+            const omega_z = (alpha || 0) - gyroBiasRef.current; // Subtract bias
+            const gyroHeadingChange = omega_z * deltaTime * (180 / Math.PI); // Convert to degrees
+            gyroHeadingDriftRef.current += gyroHeadingChange;
+            gyroHeadingSamplesRef.current += 1;
+        }
+        if (deltaTime <= 0 || deltaTime < 0.001 || deltaTime > 0.1) {
+            // Skip if deltaTime is unreasonable (>100ms = likely tab switch)
+            lastTimestampRef.current = now;
+            return;
+        }
         lastTimestampRef.current = now;
 
         const axRaw = acc.x || 0;
         const ayRaw = acc.y || 0;
 
-        // Stationary detection
-        const accMag2D = Math.hypot(axRaw, ayRaw);
-        const stationaryThreshold = 0.12;
-        const stationarySamplesRequired = 6;
+        // Bias correction FIRST (use calibrated bias)
+        const axUnbiased = axRaw - accelBiasRef.current.x;
+        const ayUnbiased = ayRaw - accelBiasRef.current.y;
+
+        // Stationary detection - use UNBIASED acceleration (2D magnitude)
+        // Adaptive based on measured noise (2x std dev - less aggressive), minimum 0.15 m/s²
+        const stationaryThreshold = calibrationDataRef.current
+            ? Math.max(0.15, Math.hypot(accelNoiseRef.current.x, accelNoiseRef.current.y) * 2)
+            : 0.15;
+        const stationarySamplesRequired = 5;
+        
+        // Stationary detection using UNBIASED acceleration
+        const accMag2D = Math.hypot(axUnbiased, ayUnbiased);
 
         if (accMag2D < stationaryThreshold) {
             stationaryCountRef.current += 1;
@@ -162,56 +198,218 @@ export default function DeadReckoning({ theme = "dark", onTrajectoryUpdate }) {
             stationaryCountRef.current = 0;
         }
 
+        // When stationary, update bias and reset velocity
         if (stationaryCountRef.current >= stationarySamplesRequired) {
-            accelBiasRef.current.x = accelBiasRef.current.x * 0.8 + axRaw * 0.2;
-            accelBiasRef.current.y = accelBiasRef.current.y * 0.8 + ayRaw * 0.2;
+            accelBiasRef.current.x = accelBiasRef.current.x * 0.9 + axRaw * 0.1;
+            accelBiasRef.current.y = accelBiasRef.current.y * 0.9 + ayRaw * 0.1;
+            
+            // Calibrate gyro bias when stationary (very slow adaptation)
+            if (gyroHeadingSamplesRef.current > 10) {
+                const avgGyroRate = gyroHeadingDriftRef.current / gyroHeadingSamplesRef.current * (Math.PI / 180) / event.rotationRate?.alpha_sample_time || 0.01;
+                gyroBiasRef.current = gyroBiasRef.current * 0.95 + avgGyroRate * 0.05;
+            }
+            
+            // Reset gyro drift when stationary
+            gyroHeadingDriftRef.current = 0;
+            gyroHeadingSamplesRef.current = 0;
+            
             velRef.current = { x: 0, y: 0 };
-            setVelocity(velRef.current);
+            setVelocity({ x: 0, y: 0 });
             return;
         }
 
-        // Bias correction
-        const axUnbiased = axRaw - accelBiasRef.current.x;
-        const ayUnbiased = ayRaw - accelBiasRef.current.y;
-
-        // Deadzone
-        const deadzone = 0.05;
+        // Adaptive deadzone based on measured noise (1.5x standard deviation - less filtering)
+        // Minimum of 0.02 to allow small movements
+        const deadzone = calibrationDataRef.current 
+            ? Math.max(0.02, Math.max(accelNoiseRef.current.x, accelNoiseRef.current.y) * 1.5)
+            : 0.02;
         const ax = Math.abs(axUnbiased) > deadzone ? axUnbiased : 0;
         const ay = Math.abs(ayUnbiased) > deadzone ? ayUnbiased : 0;
 
-        // Rotate to world frame
-        const headingRad = (headingRef.current || 0) * (Math.PI / 180);
-        const worldAx = ax * Math.cos(headingRad) + ay * Math.sin(headingRad);
-        const worldAy = -ax * Math.sin(headingRad) + ay * Math.cos(headingRad);
+        // Rotate to world frame using heading angle
+        // Use compass heading + gyro prediction between updates for smoother rotation
+        // Limit gyro drift to prevent large errors (max ±10° drift between compass updates)
+        const maxGyroDrift = 10; // degrees
+        const clampedGyroDrift = Math.max(-maxGyroDrift, Math.min(maxGyroDrift, gyroHeadingDriftRef.current));
+        const predictedHeading = (headingRef.current || 0) + clampedGyroDrift;
+        const headingRad = predictedHeading * (Math.PI / 180);
+        const cosH = Math.cos(headingRad);
+        const sinH = Math.sin(headingRad);
+        
+        // Rotation matrix: [cos -sin; sin cos]
+        const worldAx = ax * cosH - ay * sinH;
+        const worldAy = ax * sinH + ay * cosH;
 
-        // Integrate velocity with damping
-        const damping = 1.0;
-        const newVelX =
-            (velRef.current.x + worldAx * deltaTime) * Math.exp(-damping * deltaTime);
-        const newVelY =
-            (velRef.current.y + worldAy * deltaTime) * Math.exp(-damping * deltaTime);
+        // Integrate velocity with minimal friction (less damping for better tracking)
+        // Reduced friction from 0.98 to 0.995 (0.5% decay instead of 2%)
+        const friction = 0.995;
+        const newVelX = (velRef.current.x + worldAx * deltaTime) * friction;
+        const newVelY = (velRef.current.y + worldAy * deltaTime) * friction;
+
+        // Velocity threshold to prevent noise accumulation (reduced for better sensitivity)
+        const velThreshold = 0.0005; // Reduced from 0.001
+        const finalVelX = Math.abs(newVelX) > velThreshold ? newVelX : 0;
+        const finalVelY = Math.abs(newVelY) > velThreshold ? newVelY : 0;
 
         // Integrate position
-        const newPosX = posRef.current.x + newVelX * deltaTime;
-        const newPosY = posRef.current.y + newVelY * deltaTime;
+        const newPosX = posRef.current.x + finalVelX * deltaTime;
+        const newPosY = posRef.current.y + finalVelY * deltaTime;
 
-        velRef.current = { x: newVelX, y: newVelY };
+        velRef.current = { x: finalVelX, y: finalVelY };
         posRef.current = { x: newPosX, y: newPosY };
 
-        setVelocity(velRef.current);
-        setPosition(posRef.current);
+        // Debug logging every 60 frames (~1 second)
+        if (Math.random() < 0.016) {
+            console.log(`DR Debug:`, {
+                accMag: accMag2D.toFixed(4),
+                threshold: stationaryThreshold.toFixed(4),
+                stationary: stationaryCountRef.current,
+                deadzone: deadzone.toFixed(4),
+                ax: ax.toFixed(4),
+                ay: ay.toFixed(4),
+                vel: `(${finalVelX.toFixed(4)}, ${finalVelY.toFixed(4)})`,
+                pos: `(${newPosX.toFixed(3)}, ${newPosY.toFixed(3)})`
+            });
+        }
 
-        const newPath = [...pathRef.current, { x: newPosX, y: newPosY }];
-        pathRef.current = newPath;
-        setPath(newPath);
-        if (onTrajectoryUpdate) onTrajectoryUpdate(newPath);
-    }, []);
+        // Update display every 100ms for responsive UI (10Hz update rate)
+        // (calculations run at 60Hz, display updates at 10Hz)
+        if (lastDisplayUpdateRef.current === null) {
+            lastDisplayUpdateRef.current = now;
+            setVelocity(velRef.current);
+            setPosition(posRef.current);
+        } else {
+            const timeSinceDisplay = now - lastDisplayUpdateRef.current;
+            if (timeSinceDisplay > 100) {
+                setVelocity(velRef.current);
+                setPosition(posRef.current);
+                lastDisplayUpdateRef.current = now;
+            }
+        }
+
+        // Update path with intelligent sampling
+        // Only add point if: (1) moved > 0.02m OR (2) 250ms elapsed
+        const currentPath = pathRef.current;
+        const lastPathPoint = currentPath[currentPath.length - 1];
+        const distFromLast = Math.hypot(
+            newPosX - lastPathPoint.x,
+            newPosY - lastPathPoint.y
+        );
+        
+        // Initialize path timestamp on first update
+        if (lastPathUpdateRef.current === null) {
+            lastPathUpdateRef.current = now;
+        }
+        
+        const timeSinceLastPath = now - lastPathUpdateRef.current;
+
+        // Add to path if: moved 0.02m OR waited 250ms (fast, accurate graph)
+        if (distFromLast > 0.02 || timeSinceLastPath > 250) {
+            const newPath = [...currentPath, { x: newPosX, y: newPosY }];
+            pathRef.current = newPath;
+            setPath(newPath);
+            if (onTrajectoryUpdate) onTrajectoryUpdate(newPath);
+            lastPathUpdateRef.current = now; // Reset path update timer
+        }
+    }, [onTrajectoryUpdate]);
+
+    // IMU Calibration - measures bias and noise of all sensors
+    const calibrateIMU = async () => {
+        return new Promise((resolve) => {
+            setIsCalibrating(true);
+            setCalibrationStatus("Calibrating IMU sensors (5 seconds)...");
+            
+            const calibrationDuration = 5000; // 5 seconds
+            const startTime = performance.now();
+            const accelSamples = { x: [], y: [], z: [] };
+            const gyroSamples = []; // Z-axis only (alpha)
+            const compassSamples = [];
+            
+            const calibrationHandler = (event) => {
+                const now = performance.now();
+                const elapsed = now - startTime;
+                
+                if (elapsed > calibrationDuration) {
+                    window.removeEventListener("devicemotion", calibrationHandler);
+                    window.removeEventListener("deviceorientation", calibrationOrientationHandler);
+                    
+                    // Calculate bias and noise from samples
+                    const calcStats = (samples) => {
+                        if (samples.length === 0) return { mean: 0, stdDev: 0 };
+                        const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+                        const variance = samples.reduce((a, b) => a + (b - mean) ** 2, 0) / samples.length;
+                        const stdDev = Math.sqrt(variance);
+                        return { mean, stdDev };
+                    };
+                    
+                    const accelStats = {
+                        x: calcStats(accelSamples.x),
+                        y: calcStats(accelSamples.y),
+                        z: calcStats(accelSamples.z),
+                    };
+                    const gyroStats = calcStats(gyroSamples);
+                    const compassStats = calcStats(compassSamples);
+                    
+                    // Store calibration
+                    calibrationDataRef.current = { accelStats, gyroStats, compassStats };
+                    
+                    // Set biases (mean of stationary readings)
+                    accelBiasRef.current = {
+                        x: accelStats.x.mean,
+                        y: accelStats.y.mean,
+                        z: accelStats.z.mean - gravityRef.current, // Remove gravity from Z
+                    };
+                    gyroBiasRef.current = gyroStats.mean;
+                    accelNoiseRef.current = {
+                        x: accelStats.x.stdDev,
+                        y: accelStats.y.stdDev,
+                        z: accelStats.z.stdDev,
+                    };
+                    gyroNoiseRef.current = gyroStats.stdDev;
+                    compassNoiseRef.current = compassStats.stdDev;
+                    
+                    setCalibrationStatus(
+                        `Calibration complete!\nAccel Bias: (${accelBiasRef.current.x.toFixed(3)}, ${accelBiasRef.current.y.toFixed(3)})\n` +
+                        `Gyro Bias: ${gyroBiasRef.current.toFixed(4)} rad/s\n` +
+                        `Compass Noise: ${compassNoiseRef.current.toFixed(1)}°`
+                    );
+                    
+                    setIsCalibrating(false);
+                    setTimeout(() => setCalibrationStatus(""), 3000);
+                    resolve({ accelStats, gyroStats, compassStats });
+                    return;
+                }
+                
+                // Collect samples
+                if (event.acceleration) {
+                    accelSamples.x.push(event.acceleration.x || 0);
+                    accelSamples.y.push(event.acceleration.y || 0);
+                    accelSamples.z.push(event.acceleration.z || 0);
+                }
+                if (event.rotationRate) {
+                    gyroSamples.push(event.rotationRate.alpha || 0);
+                }
+            };
+            
+            const calibrationOrientationHandler = (event) => {
+                if (typeof event.alpha === "number" && !Number.isNaN(event.alpha)) {
+                    compassSamples.push(event.alpha);
+                }
+            };
+            
+            window.addEventListener("devicemotion", calibrationHandler);
+            window.addEventListener("deviceorientation", calibrationOrientationHandler);
+        });
+    };
 
     // Start monitoring
     const startMonitoring = async () => {
         setError(null);
         lastTimestampRef.current = null;
+        
+        // Perform calibration first
         try {
+            setCalibrationStatus("Requesting sensor permissions...");
             let motionGranted = false;
             let orientationGranted = false;
 
@@ -235,9 +433,24 @@ export default function DeadReckoning({ theme = "dark", onTrajectoryUpdate }) {
             }
 
             if (motionGranted && orientationGranted) {
+                // Run calibration before starting DR
+                await calibrateIMU();
+                
+                // Reset position and path after calibration
+                velRef.current = { x: 0, y: 0 };
+                posRef.current = { x: 0, y: 0 };
+                pathRef.current = [{ x: 0, y: 0 }];
+                lastPathUpdateRef.current = null; // Reset path timing for next session
+                lastDisplayUpdateRef.current = null; // Reset display update timing
+                setVelocity({ x: 0, y: 0 });
+                setPosition({ x: 0, y: 0 });
+                setPath([{ x: 0, y: 0 }]);
+                
                 window.addEventListener("devicemotion", handleDeviceMotion);
                 window.addEventListener("deviceorientation", handleDeviceOrientation);
                 setIsMonitoring(true);
+                setCalibrationStatus("Ready! Move your device to track position.");
+                setTimeout(() => setCalibrationStatus(""), 2000);
             } else {
                 setError("Permission to access one or more sensors was denied.");
             }
@@ -342,7 +555,12 @@ export default function DeadReckoning({ theme = "dark", onTrajectoryUpdate }) {
                                 {error}
                             </p>
                         )}
-                        {!isMonitoring && !error && (
+                        {calibrationStatus && (
+                            <p className="text-amber-200 text-sm bg-amber-900/30 border border-amber-500/40 rounded px-3 py-2 mt-1 max-w-md text-right whitespace-pre-line">
+                                {calibrationStatus}
+                            </p>
+                        )}
+                        {!isMonitoring && !error && !calibrationStatus && (
                             <p className="text-slate-300 text-xs text-right max-w-xs">
                                 Fire up sensors to start the crawl.
                             </p>

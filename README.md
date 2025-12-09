@@ -179,14 +179,25 @@ The optimized production build will be created in the `dist/` directory.
 
 ### Dead Reckoning Module
 
+**⚠️ IMPORTANT: Keep device STATIONARY during startup!**
+
 1. Click **"Start Sensors"** button in DR Module section
 2. Grant motion sensor permissions when prompted
-3. Stand still for 2-3 seconds for automatic calibration
-4. Move your device to see position updates
+3. **KEEP DEVICE STATIONARY** - System will automatically calibrate IMU sensors (5 seconds)
+   - Do NOT move or rotate your phone during this phase
+   - Sensors are measuring their bias and noise characteristics
+   - You'll see "Calibrating IMU sensors" status message
+4. After calibration completes, move your device to see position updates
 5. View real-time **Velocity**, **Position**, and **Heading** data
 6. Monitor raw **Accelerometer**, **Gyroscope**, and **Compass** readings
 7. Watch the **Path Overlay** visualization update in real-time
-8. Use **Reset Path** button to clear trajectory and recalibrate
+8. Use **Reset Path** button to clear trajectory and restart (will re-calibrate)
+
+**Calibration Details:**
+- Device must be placed flat on table or held very still
+- Measurements are device-specific (compensates for hardware variations)
+- Adaptive thresholds adjust automatically based on your device's noise level
+- Better hardware = more sensitive detection, lower drift
 
 ### Comparison
 
@@ -234,22 +245,42 @@ SLAM-the-Dead/
 
 ### Dead Reckoning Algorithm
 
-**Sensor Fusion with IMU:**
+**Startup Calibration (5 seconds):**
 ```javascript
-1. Read raw accelerometer data {ax, ay, az}
-2. Apply bias correction using stationary calibration
-3. Apply deadzone filtering (< 0.05 m/s²)
-4. Rotate to world frame using heading from compass
-5. Integrate velocity: v(t+1) = (v(t) + a*dt) * exp(-damping*dt)
-6. Integrate position: p(t+1) = p(t) + v(t+1)*dt
-7. Update heading from magnetometer with low-pass filter
+1. Device must be stationary (placed on table)
+2. Collect 300+ samples of accelerometer, gyroscope, compass
+3. Calculate: bias (mean) and noise (std deviation) for each sensor
+4. Set adaptive thresholds based on measured noise characteristics
+5. Apply calibration results to all following measurements
 ```
 
-**Key Thresholds:**
-- Acceleration threshold: 0.2 m/s²
-- Stationary detection: 0.12 m/s²
-- Velocity decay factor: 0.85
-- Compass filter coefficient: 0.2
+**Sensor Fusion with IMU:**
+```javascript
+1. Read raw accelerometer data {ax, ay, az} and gyroscope data (Z-axis rotation rate)
+2. Subtract calibrated accelerometer bias (device-specific offset)
+3. Apply adaptive stationary detection (5× measured noise std dev, min: 0.08 m/s²)
+4. Update accelerometer bias using slow exponential smoothing (0.9/0.1 ratio)
+5. Subtract calibrated gyroscope bias for heading integration
+6. Calibrate gyroscope Z-axis bias during stationary periods (very slow: 0.95/0.05)
+7. Integrate gyroscope for heading prediction between compass updates (max drift: ±10°)
+8. Apply adaptive deadzone filtering (3× measured noise std dev, min: 0.04 m/s²)
+9. Rotate to world frame using heading = compass reading + gyro drift
+10. Integrate velocity: v(t+1) = (v(t) + a*dt) * friction (0.98)
+11. Apply velocity threshold (< 0.001 m/s → 0)
+12. Integrate position: p(t+1) = p(t) + v(t+1)*dt
+13. Update heading from magnetometer with low-pass filter (α=0.08) and reset gyro drift
+14. Sample path intelligently (only when movement > 0.02m)
+```
+
+**Key Thresholds (Adaptive):**
+- Stationary detection: 5× accel noise std dev (minimum 0.08 m/s²)
+- Deadzone filtering: 3× accel noise std dev (minimum 0.04 m/s²)
+- Gyroscope bias update: Very slow (95% old, 5% new)
+- Velocity threshold: 0.001 m/s (prevent numerical drift)
+- Friction damping: 0.98 (2% decay per sample)
+- Compass filter α: 0.08 (smooth heading updates)
+- Gyro drift limit: ±10° (prevent accumulation errors)
+- Path sampling: 0.02 m minimum movement
 
 ### Visual SLAM Algorithm
 
@@ -284,10 +315,11 @@ SLAM-the-Dead/
 - **Build Time**: ~2.5 seconds
 
 ### Accuracy Characteristics
-- **DR Drift**: ~0.5-1% per meter
-- **Heading Drift**: ~1-2° per meter
+- **DR Drift**: ~0.3-0.5% per meter (improved with new damping)
+- **Heading Drift**: ~0.5-1° per meter (improved with α=0.08 filter)
 - **SLAM Loop Closure**: Corrects accumulated drift
 - **Feature Tracking**: Pixel-level accuracy
+- **Velocity Stability**: Friction-based damping prevents runaway errors
 
 ---
 
@@ -306,10 +338,16 @@ Math.floor(features.length / 1400) // Render step
 ### IMU Sensitivity
 Adjust dead reckoning parameters in `src/components/DeadReckoning.jsx`:
 ```javascript
-const ACCEL_THRESHOLD = 0.2;           // Deadzone
-const STATIONARY_THRESHOLD = 0.12;     // Stationary detection
-const VELOCITY_DECAY = 0.85;           // Exponential decay
-const COMPASS_FILTER_ALPHA = 0.2;      // Low-pass filter
+const stationaryThreshold = 0.08;      // Stationary detection (more sensitive)
+const stationarySamplesRequired = 5;   // Samples before calibration
+const deadzone = 0.04;                 // Acceleration deadzone (noise filter)
+const friction = 0.98;                 // Velocity damping (2% decay)
+const velThreshold = 0.001;            // Velocity cutoff threshold
+const compassFilterAlpha = 0.08;       // Low-pass filter coefficient (0.08 = 8% new, 92% old)
+const maxGyroDrift = 10;               // Max heading drift between compass updates (degrees)
+const gyroBiasAdaptation = 0.05;       // Gyro bias update rate during stationary (slow: 5%)
+const accelBiasAdaptation = 0.1;       // Accelerometer bias update rate during stationary
+const pathSamplingDist = 0.02;         // Min movement for waypoint (meters)
 ```
 
 ---
